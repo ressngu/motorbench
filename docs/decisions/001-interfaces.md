@@ -1,14 +1,41 @@
 # 001. Hardware interfaces for test procedures
 
-Date: 2026-11-26
+- Status: Accepted
+- Date: 2026-11-26
 
 ## Context
 
-As a first step, I want to work out what the software must be able to ask the hardware to do, specifically for measuring the torque constand and back-EMF constant. These are referenced in section "1) Torque / Back-EMF constant" in (Lee et al., 2019).
+The test procedures (torque constant first, then back-EMF) must run against a simulated motor now, and against the real rig (ODrive S1 drives and an STM32 sensor hub) after the course. I want to write each procedure once and run it on either without changes.
 
-## Decisions
+To work out what the software must be able to ask the hardware to do, I walked through the torque-constant and back-EMF tests in Lee et al. (2019), §II-B-1 "Torque / Back-EMF constant". The torque-constant walk-through is at the end of this record.
 
-For the torque-constant and back-EMF tests, I have written down the methods needed from the three objects: the drive, the torque sensor, and the clock. I 
+## Options
+
+### How procedures reach the hardware
+
+1. **Scripts that call the ODrive library directly.** Fastest to start, but nothing runs without hardware attached, and every script repeats the setup code.
+2. **One big `Rig` class with every method.** One place to look, but a simulator would have to copy the whole class, and every procedure depends on every device.
+3. **A small interface per device (drive, torque sensor, clock).** Procedures only use the interfaces, so a simulated class and a hardware class can be swapped in. Costs more classes and files.
+
+### How the interfaces are defined in Python
+
+1. **Abstract base class (`abc.ABC` with `@abstractmethod`).** Each device class inherits from its interface. Python refuses to create an object that is missing a method, as soon as the code runs. Shows up as inheritance in a class diagram.
+2. **`typing.Protocol`.** No inheritance: any class with matching methods fits. A missing method is only caught by a type checker (mypy), not when the code runs. Useful for fitting classes I can't edit, such as a library's.
+3. **Duck typing (no interface).** Least code, but nothing documents or checks what a device must provide.
+
+### Smaller choices within the interfaces
+
+| Question | Options considered | Chosen | Why |
+| --- | --- | --- | --- |
+| How a procedure lets time pass | Read the time and loop until enough has passed; or a `Clock` with `wait()` | `Clock.wait(duration_s)` | A loop on simulated time never ends, because nothing moves simulated time forward. `wait()` sleeps on hardware and steps the physics in simulation. |
+| How torque is read | One sample per call; a block that waits and collects the next N seconds; or a block of the last N seconds from a buffer | `read_block(duration_s)` returns the last `duration_s` of raw samples | Python on Windows can't request samples at an even 1 kHz, so the STM32 hub buffers them with its own timestamps. Returning the last N seconds means only `Clock.wait()` lets time pass. Averaging happens in the analysis, so later tests (cogging FFT) can reuse the raw samples. |
+| How drive values are read | Separate getters (`get_current`, `get_speed`, ...); or one snapshot | `read_state() -> DriveState` | All values come from the same instant, it's one CAN round trip instead of several, and adding a field later doesn't change the interface. |
+| Which current Kt is fitted against | Commanded; or measured | Log both, fit against measured | Kt is a property of the motor. Measured current differs from the command through the drive's offsets and tracking error, so the gap is a check on the drive, not part of Kt. |
+| How back-EMF is measured | Spin freely at a fixed voltage and compute V − i·R (Lee et al., 2019); or spin the motor with the absorber while its phases are open and measure the voltage directly (no-load test, Bojoi & Armando) | Absorber with phases open | With no current in the windings there's no i·R drop, so no separate resistance test is needed first and the drive doesn't need an open-loop voltage mode. |
+
+## Decision
+
+Each device gets its own interface (option 3), defined as an abstract base class. I chose ABCs over Protocols because a missing method fails as soon as the code runs without needing mypy, the inheritance shows in the class diagram, and I write every device class myself, so Protocol's main advantage doesn't apply. If I wrap a library later, I'll write a small adapter class for it.
 
 | Object | Methods |
 | --- | --- |
@@ -16,78 +43,54 @@ For the torque-constant and back-EMF tests, I have written down the methods need
 | `TorqueSensor` | `tare()`, `read_block(duration_s) -> TorqueSeries` |
 | `Clock` | `now_s() -> float`, `wait(duration_s)` |
 
-### Syntax
+- The same `MotorDrive` interface is used for the motor under test and for the absorber. The absorber uses `set_velocity` in the back-EMF test.
+- `iq_a` is the torque-producing (q-axis) current. In ODrive's convention it equals the peak phase current (conventions explained in Lee et al., 2023).
+- `DriveState` is a frozen dataclass (a read-only record) with `t_s`, `iq_a`, `speed_rad_s`, `angle_rad`, `vbus_v` and `temp_c`.
+- `tare()` zeros the torque sensor with no load on it.
+- `read_block(duration_s)` returns the samples from the last `duration_s` seconds. It doesn't wait itself.
+- `now_s()` returns seconds since the run started. On hardware it uses a monotonic clock (Python's `time.monotonic()`), so it can't jump when the PC syncs its clock.
 
-For function definitions, I will use type-hinted formatting with variable names that include units. For example,
+### Naming
 
-```python
-def set_current(self, iq_a: float) -> None: # takes a current (in amps), returns nothing
-def get_current(self) -> float: # takes nothing, returns a current
-```
-
-Units go at the end of the name: `_a` amps, `_v` volts, `_nm` newton-meters, `_s` seconds, `_rad_s` rad/s, `_c` degrees Celsius.
-
-### Logging both commanded and measured current
-
-Torque constant is a property of the motor, so measured torque is fitted against the measured current that flows through the windings. Measured current differs from the commanded current by small offsets due to the drive's current control, so the gap between commanded and measured current is a check on the drive.
-
-### Dealing with time (clock)
-
-At first, I suggested reading the current time and subtracting the global time at the start of the test. However, this only works when testing on hardware. In simulation, simulated time only moves forward when something steps the model forward. Thus, it is important to step the simulated time. The methods here are:
-
-- `now_s() -> float:` time in seconds since the run started.
-- `wait(duration_s: float) -> None`: on the real clock this sleeps, but on the simulated clock it steps time forward by that duration.
-
-### Torque sensor: returning block vs raw individual samples
-
-At first, I thought about the sensor taking one reading at a time, and a function can be used to block samples together to form averages (to follow the procedure of Lee et al., 2019). However, doing so create timing issues due to sampling rate of the microcontroller and communication with python scripts.
-
-Instead, the microcontroller can block readings together and buffer the samples so that python fetches them in batches.
-
-### One method for drive
-
-Instead of separate `get_current`, `get_speed`, and `get_voltage` methods, I can use one method that returns everything at the same instant:
+Functions use type hints, and variable names end in their unit: `_a` amps, `_v` volts, `_nm` newton-meters, `_s` seconds, `_rad_s` rad/s, `_c` degrees Celsius. For example:
 
 ```python
-def read_state(self) -> DriveState: ...
-# DriveState: t_s, iq_a, speed_rad_s, angle_rad, vbus_v, temp_c
+def set_current(self, iq_a: float) -> None: ...  # takes amps, returns nothing
+def read_state(self) -> DriveState: ...  # takes nothing, returns a snapshot
 ```
 
-One methods instead of several leads to the following advantages:
+## Consequences
 
-- All the values come from the same moment.
-- It's one CAN message round trip instead of several.
-- Adding a field later doesn't change the interface.
+- Every new device (the simulator, an ODrive S1, the STM32 hub) needs its own class that implements every method of its interface.
+- Procedures only let time pass through `Clock.wait()`, never `time.sleep()`, or they will hang in simulation.
+- `disable()` must be safe to call twice, because a safety check may call it after a fault has already stopped the motor.
+- For the back-EMF test, `disable()` must leave the phases floating, not shorted. They only stay truly open below roughly Kv × Vbus (about 310 rpm at 36 V, 210 rpm at 24 V for the BotWheel). Above that, the drive's diodes conduct and brake the motor.
+- Still open:
+  - the fields of `TorqueSeries`;
+  - what measures the voltage in the back-EMF test (not the motor's own drive; a divider into the STM32 hub's ADC is one option), and its interface. A later record will cover it.
 
-`DriveState` would be a frozen dataclass (a read-only record).
+## Worked example: torque-constant procedure
 
-### Back-EMF test
+From Lee et al. (2019), §II-B-1:
 
-The back-EMF test I plan to go with is different from the one discussed in Lee et al., 2019. Lee at al. let's the motor spin freely with a fixed voltage and calculates the back-EMF using applied voltage - i*R. This has two costs: (1) It needs R from a separate test first, and (2) The drive must support a fixed open-loop voltage mode.
-
-Instead, we can use an absorber motor to spin the motor under test. Then, no current flows to spin the motor and no i*R correction is needed, so the voltage can be measured directly. Some methods are needed:
-
-- `set_velocity(speed_rad_s: float) -> None` on whichever drive is acting as the absorber.
-- Speed from the motor's encoder (obtained in `read_state`).
-- A voltage measurement from something other than the motor's drive.
-
-## The torque-constant procedure
-
-As described in Lee et al., 2019, the torque-constant procedure is:
-
-1. **Before starting:** confirm the shaft is locked, check every planning current is within the motor's limits, `tare()`, `enable()`.
-2. **Plan:** currents from -10 A to +10 A in 2 A steps, five trials each, in random order.(Random order stops slow drift, like heating, from looking like a trend.)
+1. **Before starting:** confirm the shaft is locked, check every planned current is within the motor's limits, `tare()`, `enable()`.
+2. **Plan:** currents from −10 A to +10 A in 2 A steps, five trials each, in random order. (Random order stops slow drift, like heating, from looking like a trend.)
 3. **Each trial:**
    1. `set_current(i)`
    2. `wait(1.0)` to let it settle
-   3. read 7 s of torque and drive states
-   4. `wait(1.0)`
-   5. `set_current(0)`, then rest so the motor cools.
-4. **After last trial**, or on any error: `disable()`.
-5. **Analysis:** average torque and measured current within each trial, then across the five trials at each level. Fit a straight line. The slop is Kt, reported with its 95% interval and R^2.
+   3. for 7 s: `wait(0.1)`, then `read_state()` (70 snapshots of measured current)
+   4. `read_block(7.0)` to get the torque samples from those same 7 s
+   5. `wait(1.0)`
+   6. `set_current(0)`, then rest so the motor cools
+4. **After the last trial**, or on any error: `disable()`.
+5. **Analysis:** average torque and measured current within each trial, then across the five trials at each level. Fit a straight line. The slope is Kt, reported with its 95% confidence interval and R².
 
 ## References
 
-```text
-Lee, U. H., Pan, C.-W., & Rouse, E. J. (2019). Empirical characterization of a high-performance exterior-rotor type brushless DC motor and drive. IEEE/RSJ IROS, 8018–8025.
-```
+- Lee, U. H., Pan, C.-W., & Rouse, E. J. (2019). Empirical characterization of a high-performance exterior-rotor type brushless DC motor and drive. *IEEE/RSJ IROS*, 8018–8025. §II-B-1 "Torque / Back-EMF constant", p. 20 of the combined PDF.
+- Lee, U. H., et al. (2023). How to model brushless electric motors for the design of lightweight robotic systems. arXiv:2310.00080. https://arxiv.org/abs/2310.00080
+- Bojoi, R., & Armando, E. (n.d.). *Getting the back-EMF voltage constant of permanent magnet motors with just one lap wrist using GEN3i data recorder* [Technical article]. HBM. https://www.Hbm.com/fileadmin/mediapool/files/technical-articles-technotes-white-papers/Power_Analyzer_and_Electric_Power_Testing/Getting_the_Back_Emf_Voltage_Constant_of_Permanent_Magnet_Motors_with_Just_One_Lap_Wrist_using.pdf
+
+---
+
+AI usage: options and wording drafted with Claude from my notes and our discussion; I chose the decisions and reviewed the text.
