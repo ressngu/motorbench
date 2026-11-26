@@ -3,6 +3,8 @@
 
 **Goal:** Build a python application that runs characterization tests on brushless motors and analyzes the results.
 
+**Approval status:** Proposal was approved by Jian and I am allowed to proceed independently. However, I am required to use feature branches and submit pull requests for all repository changes.
+
 Tests should follow published brushless motor and actuator characterization methods, with:
 
 - common interfaces for motor drives and torque sensors, with a simulated motor so everything runs without hardware;
