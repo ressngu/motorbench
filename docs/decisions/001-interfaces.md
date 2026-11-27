@@ -73,17 +73,18 @@ def read_state(self) -> DriveState: ...  # takes nothing, returns a snapshot
 
 From Lee et al. (2019), §II-B-1:
 
-1. **Before starting:** confirm the shaft is locked, check every planned current is within the motor's limits, `tare()`, `enable()`.
-2. **Plan:** currents from −10 A to +10 A in 2 A steps, five trials each, in random order. (Random order stops slow drift, like heating, from looking like a trend.)
+1. **Before starting:** confirm the shaft is locked and every planned current is within the motor's limits, then `wait(1.0)`, `tare()`, `enable()`.
+2. **Plan:** currents from −5 A to +5 A in 1 A steps, five trials each (Lee et al.), in a random order (my addition: random order stops slow drift, like heating, from looking like a trend). ±5 A is within the BotWheel's 5 A continuous rating, so no cool-down rest is needed between trials.
 3. **Each trial:**
    1. `set_current(i)`
    2. `wait(1.0)` to let it settle
    3. for 7 s: `wait(0.1)`, then `read_state()` (70 snapshots of measured current)
    4. `read_block(7.0)` to get the torque samples from those same 7 s
-   5. `wait(1.0)`
-   6. `set_current(0)`, then rest so the motor cools
+   5. `wait(1.0)`, the final second, which the paper also discards
 4. **After the last trial**, or on any error: `disable()`.
-5. **Analysis:** average torque and measured current within each trial, then across the five trials at each level. Fit a straight line. The slope is Kt, reported with its 95% confidence interval and R².
+5. **Analysis:** average torque and measured current within each trial, then across the five trials at each level. Fit a straight line. The slope is Kt, reported with R² (Lee et al.) and a 95% confidence interval (my addition).
+
+_Corrected 2026-11-27: the first version said −10 A to +10 A in 2 A steps, which isn't what Lee et al. used._
 
 ## References
 
