@@ -1,0 +1,9 @@
+// AI usage: drafted with Claude; reviewed and edited by me.
+{
+    "recommendations": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "github.vscode-pull-request-github"
+    ]
+}
