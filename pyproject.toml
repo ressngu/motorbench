@@ -1,0 +1,73 @@
+# AI usage: drafted with Claude; reviewed and edited by me.
+
+[project]
+name = "motorbench"
+version = "0.0.1"
+description = "Test software for characterizing brushless motors."
+readme = "README.md"
+authors = [{ name = "Ress Nguyen" }]
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.5",
+    "scipy>=1.18.1",
+]
+
+[project.optional-dependencies]
+hardware = [
+    "odrive>=0.6.11.post1",
+]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+select = [
+    "E", "W", "F", "I", "N", "D", "UP", "B", "A",  # from my assignments repo
+    "NPY", "PT", "RUF",  # added in decision 003
+    "E261", "E262", "E265", "E266",  # comment style (preview rules)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 72
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D1"]  # test functions don't need docstrings
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers"]
+markers = [
+    "hil: hardware-in-the-loop, needs the real rig (skipped in CI)",
+    "slow: takes more than a few seconds (skip with -m 'not slow')",
+]
+
+[tool.coverage.run]
+source = ["motorbench"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.6",
+    "scipy-stubs>=1.18.1.1",
+]

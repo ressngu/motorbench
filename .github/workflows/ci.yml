@@ -1,0 +1,32 @@
+# AI usage: drafted with Claude; reviewed and edited by me.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+      - name: Install Python and locked dependencies
+        run: uv sync --locked
+      - name: Lint (ruff)
+        run: uv run ruff check
+      - name: Check formatting (ruff)
+        run: uv run ruff format --check
+      - name: Type check (mypy)
+        run: uv run mypy
+      - name: Unit and SIL tests with coverage
+        run: uv run pytest -m "not hil" --cov --cov-report=term-missing
