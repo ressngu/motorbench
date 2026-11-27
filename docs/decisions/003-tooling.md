@@ -35,7 +35,7 @@ Decisions 001 and 002 settle the design and the language. Before writing code, t
 - `uv.lock`: exact versions of every package (committed).
 - `.python-version`: Python 3.14.
 - `src/motorbench/`: the package, with `py.typed` to mark it as type-hinted.
-- `tests/unit/`, `tests/sil/`, `tests/hil/`: the three test levels from Lecture 17. HIL tests are also marked `@pytest.mark.hil`.
+- `tests/unit/`, `tests/sil/`, `tests/hil/`: the three test levels from Lecture 17, each created when its first test is written. HIL tests are also marked `@pytest.mark.hil`.
 - `.github/workflows/ci.yml`: the CI pipeline.
 - `.vscode/settings.json` and `.vscode/extensions.json`: editor settings and recommended extensions.
 
